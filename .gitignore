@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+.jarvis/settings.local.json
+
+# personal Jarvis memory for this project
+JARVIS.local.md

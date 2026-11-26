@@ -1,0 +1,45 @@
+{
+  "name": "jarvis-code",
+  "version": "0.1.0",
+  "description": "Jarvis: a personal agentic coding assistant for free and local models",
+  "scripts": {
+    "dev": "tsx --env-file=.env src/cli.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "build": "esbuild src/cli.ts --bundle --platform=node --format=esm --target=node20 --packages=external --jsx=automatic --outfile=dist/cli.js",
+    "prepublishOnly": "npm run build"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@ai-sdk/openai-compatible": "^3.0.94",
+    "@napi-rs/keyring": "^2.1.2",
+    "ai": "^7.0.181",
+    "commander": "^15.1.0",
+    "diff": "^9.0.0",
+    "fast-glob": "^3.3.3",
+    "ignore": "^7.0.17",
+    "ink": "^8.0.0",
+    "js-tiktoken": "^1.0.21",
+    "react": "^19.3.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.10",
+    "@types/react": "^19.3.2",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.1"
+  },
+  "type": "module",
+  "bin": {
+    "jarvis": "dist/cli.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "dist"
+  ]
+}
