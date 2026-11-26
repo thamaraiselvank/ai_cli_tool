@@ -12,6 +12,8 @@ import { buildSystemPrompt } from './core/systemPrompt.js';
 import { untrustedNotice } from './commands/hooks.js';
 import { isTrusted, trustedMcpServers, trustProject } from './config/trust.js';
 import { HookRunner } from './hooks/index.js';
+import { openBrowser, startUi } from './config/ui.js';
+import { stopConfigServer } from './commands/config.js';
 import { createMcpManager, type McpManager } from './mcp/client.js';
 import { listModels, PROVIDERS } from './providers/index.js';
 import { Router } from './providers/router.js';
@@ -153,8 +155,26 @@ const program = new Command()
       }),
     );
     await app.waitUntilExit();
+    await stopConfigServer(); // if /config opened the settings page
     // Stop server processes; otherwise they keep Node (and the terminal) alive after quitting.
     await mcp?.close();
+  });
+
+program
+  .command('ui')
+  .description('open the settings page in your browser (served on 127.0.0.1 only)')
+  .option('--port <n>', 'port to listen on (default: any free port)')
+  .option('--no-open', "print the link but don't open a browser")
+  .action(async (opts: { port?: string; open: boolean }) => {
+    try {
+      const ui = await startUi(process.cwd(), opts.port ? Number(opts.port) : 0);
+      console.log(`Jarvis settings: ${ui.url}`);
+      console.log('The link contains a one-time token; keep it private. Press Ctrl+C to stop.');
+      if (opts.open) openBrowser(ui.url);
+    } catch (e) {
+      console.error(`Could not start the settings page: ${(e as Error).message}`);
+      process.exit(1);
+    }
   });
 
 program

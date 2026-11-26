@@ -89,7 +89,8 @@ jarvis -p "fix the failing test" --yes     # --yes approves tool calls instead o
 | `-c, --continue` | continue the latest conversation in this folder |
 | `-r, --resume [id]` | resume a saved conversation (no id: pick from a list) |
 
-Other subcommands: `jarvis models <provider> [--free]`, `jarvis tools`, `jarvis mcp`, `jarvis trust`.
+Other subcommands: `jarvis ui` (settings page), `jarvis models <provider> [--free]`, `jarvis tools`,
+`jarvis mcp`, `jarvis trust`.
 
 ## What it can do
 
@@ -131,6 +132,7 @@ Type `/` in the chat to see these, with autocomplete.
 | `/model [provider/model]` | pick the main model |
 | `/fallback [clear]` | pick backup models, in order |
 | `/provider [name]` | add, test or remove API keys |
+| `/config` | open the settings page in your browser |
 | `/resume [id]` | continue a saved conversation |
 | `/compact [focus]` | summarize older messages to free up context |
 | `/context` | how full the context is, and what fills it |
@@ -169,6 +171,20 @@ Settings are JSON files, merged in this order (later files win):
   "agents": { "model": "groq/<a-fast-model>" }
 }
 ```
+
+**Settings page.** Prefer a form to editing JSON? Run `jarvis ui`, or type `/config` in the chat.
+It opens a page in your browser where you can:
+
+- pick models, with a list fetched from your providers
+- add and check API keys
+- edit permission rules
+- turn tools on or off
+- edit MCP servers and hooks
+- trust the folder
+
+The page shows which file you're editing and checks your changes before saving. It runs only on
+your computer (127.0.0.1), and the link contains a one-time token, so other websites can't change
+your settings.
 
 **Permission rules** look like `Tool`, `Tool(exact)` or `Tool(prefix:*)`. A tool name may end in
 `*`, so `mcp__github__*` matches every tool from one MCP server. Deny rules always beat allow
@@ -330,5 +346,4 @@ How the code is organized:
 
 `CLAUDE.md` describes the design rules and the roadmap.
 
-**Still to come:** a `jarvis ui` settings page, standalone binaries built in CI, and publishing to
-npm.
+**Still to come:** standalone binaries built in CI, and publishing to npm.
