@@ -2,12 +2,19 @@
 import { Command } from 'commander';
 import React from 'react';
 import { render } from 'ink';
+import { runMcpCli } from './commands/mcp.js';
 import { runToolsCommand, TOOLS_HELP } from './commands/tools.js';
 import { loadSettings, type Settings } from './config/settings.js';
 import { runLoop } from './core/loop.js';
 import type { Message } from './core/messages.js';
 import { Session } from './core/session.js';
 import { buildSystemPrompt } from './core/systemPrompt.js';
+import { untrustedNotice } from './commands/hooks.js';
+import { isTrusted, trustedMcpServers, trustProject } from './config/trust.js';
+import { HookRunner } from './hooks/index.js';
+import { openBrowser, startUi } from './config/ui.js';
+import { stopConfigServer } from './commands/config.js';
+import { createMcpManager, type McpManager } from './mcp/client.js';
 import { listModels, PROVIDERS } from './providers/index.js';
 import { Router } from './providers/router.js';
 import { activeTools } from './tools/registry.js';
@@ -53,17 +60,27 @@ function pickConversation(cwd: string, opts: { continue?: boolean; resume?: stri
   return { session, messages, resumed: true };
 }
 
-async function runHeadless(prompt: string, router: Router, settings: Settings, conv: Conversation, yes: boolean, usage: boolean) {
+async function runHeadless(
+  prompt: string, router: Router, settings: Settings, conv: Conversation, yes: boolean, usage: boolean, mcp?: McpManager,
+) {
   const cwd = process.cwd();
   const messages = conv.messages;
   messages.push({ role: 'user', content: prompt });
+  const notice = untrustedNotice(cwd);
+  if (notice) process.stderr.write(`[${notice}]
+`);
+  if (mcp) {
+    await mcp.start();
+    for (const s of mcp.servers()) if (s.status === 'failed') process.stderr.write(`[MCP server "${s.name}" failed: ${s.error?.split('\n')[0]}]\n`);
+  }
   for await (const ev of runLoop(messages, {
     router, cwd, settings,
     system: buildSystemPrompt(cwd),
-    tools: activeTools(settings, cwd),
+    tools: activeTools(settings, cwd, mcp?.tools()),
     sessionAllow: [],
     fileState: new Map(),
     session: conv.session,
+    hooks: HookRunner.load(cwd, conv.session.id),
     // No one to ask in headless mode: --yes approves, otherwise deny (deny rules apply either way).
     askPermission: async () => (yes ? 'allow' : 'deny'),
   })) {
@@ -107,21 +124,26 @@ const program = new Command()
     const settings = loadSettings(cwd);
     const router = buildRouter(opts, settings);
     const conv = pickConversation(cwd, opts);
+    // Servers start now, in the background; the first message waits for them if needed.
+    const mcp = createMcpManager(trustedMcpServers(cwd), cwd, pkg.version);
     if (opts.print) {
       if (router.chain.length === 0) {
         console.error('No model set up yet. Run `jarvis` once to choose a provider and model, or pass --model provider/model.');
         process.exit(1);
       }
       try {
-        await runHeadless([opts.print, ...words].join(' '), router, settings, conv, Boolean(opts.yes), Boolean(opts.usage));
+        await runHeadless([opts.print, ...words].join(' '), router, settings, conv, Boolean(opts.yes), Boolean(opts.usage), mcp);
       } catch (e) {
         console.error(`Error: ${(e as Error).message}`);
         if (opts.usage) console.error(router.formatUsage());
+        await mcp?.close();
         process.exit(1);
       }
+      await mcp?.close();
       return;
     }
-    render(
+    void mcp?.start();
+    const app = render(
       React.createElement(App, {
         router,
         cwd,
@@ -129,8 +151,53 @@ const program = new Command()
         session: conv.session,
         initialMessages: conv.resumed ? conv.messages : undefined,
         openResumePicker: opts.resume === true,
+        mcp,
       }),
     );
+    await app.waitUntilExit();
+    await stopConfigServer(); // if /config opened the settings page
+    // Stop server processes; otherwise they keep Node (and the terminal) alive after quitting.
+    await mcp?.close();
+  });
+
+program
+  .command('ui')
+  .description('open the settings page in your browser (served on 127.0.0.1 only)')
+  .option('--port <n>', 'port to listen on (default: any free port)')
+  .option('--no-open', "print the link but don't open a browser")
+  .action(async (opts: { port?: string; open: boolean }) => {
+    try {
+      const ui = await startUi(process.cwd(), opts.port ? Number(opts.port) : 0);
+      console.log(`Jarvis settings: ${ui.url}`);
+      console.log('The link contains a one-time token; keep it private. Press Ctrl+C to stop.');
+      if (opts.open) openBrowser(ui.url);
+    } catch (e) {
+      console.error(`Could not start the settings page: ${(e as Error).message}`);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('trust')
+  .description("trust this folder's .jarvis settings to run hooks and MCP servers")
+  .action(() => {
+    const cwd = process.cwd();
+    if (isTrusted(cwd)) return console.log('This folder is already trusted.');
+    console.log(`Trusted ${cwd} (saved in ${trustProject(cwd)}).`);
+  });
+
+program
+  .command('mcp [args...]')
+  .description('manage MCP servers (list, add, remove, get)')
+  .allowUnknownOption() // lets --global/--env/-y etc. reach our parser untouched
+  .helpOption(false) // -h/--help go to runMcpCli, which prints MCP_HELP
+  .action(async () => {
+    try {
+      console.log(await runMcpCli(process.argv.slice(process.argv.indexOf('mcp') + 1), process.cwd(), pkg.version));
+    } catch (e) {
+      console.error((e as Error).message);
+      process.exit(1);
+    }
   });
 
 program

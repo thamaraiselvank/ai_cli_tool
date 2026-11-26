@@ -2,6 +2,7 @@ import type { Settings } from '../config/settings.js';
 import { checkPermission } from '../permissions/index.js';
 import type { Router } from '../providers/router.js';
 import { agentToolNames } from '../agents/index.js';
+import type { HookResult, HookRunner } from '../hooks/index.js';
 import { estimateToolTokens, toSdkTools } from '../tools/registry.js';
 import { callIsReadOnly, type AgentRequest, type Tool } from '../tools/types.js';
 import { isContextOverflow, manageContext, type ManageOptions } from './context.js';
@@ -42,7 +43,14 @@ export interface LoopOptions {
   session?: Session;
   /** Model chain override for every request of this loop (sub-agents). */
   models?: string[];
+  /** User hooks (see hooks/index.ts). Tool hooks also apply inside sub-agents. */
+  hooks?: HookRunner;
+  /** Sub-agents skip UserPromptSubmit and Stop hooks: those are about the user's conversation. */
+  isSubagent?: boolean;
 }
+
+/** How often a Stop hook may send the model back to work in one turn (guards against loops). */
+const MAX_STOP_CONTINUES = 3;
 
 interface Prepared {
   call: ToolCall;
@@ -78,7 +86,23 @@ export async function* runLoop(messages: Message[], opts: LoopOptions): AsyncGen
     model: opts.models?.[0],
   };
   const runAgent = makeAgentRunner(opts);
+  const hooks = opts.hooks;
+  const topLevel = !opts.isSubagent;
+
+  // ---- UserPromptSubmit hooks: may block the prompt or attach context to it ------------------
+  const prompt = messages.at(-1);
+  if (hooks && topLevel && prompt?.role === 'user' && hooks.has('UserPromptSubmit')) {
+    const r = await hooks.run('UserPromptSubmit', { prompt: prompt.content }, opts.abortSignal);
+    yield* hookErrors(r);
+    if (r.block) {
+      messages.pop(); // never reaches the model or the transcript
+      yield { type: 'notice', text: `Prompt blocked by a hook: ${r.block}` };
+      return;
+    }
+    if (r.context.length) prompt.content += `\n\n<hook-context>\n${r.context.join('\n\n')}\n</hook-context>`;
+  }
   opts.session?.sync(messages); // the user's new message
+  let stopContinues = 0;
 
   for (let step = 0; step < maxSteps; step++) {
     // ---- 0. Keep the request under the model's limit (clear old tool output / compact) --------
@@ -100,7 +124,22 @@ export async function* runLoop(messages: Message[], opts: LoopOptions): AsyncGen
     const { text, toolCalls: calls } = response;
     messages.push({ role: 'assistant', content: text, toolCalls: calls.length ? calls : undefined });
     opts.session?.sync(messages);
-    if (calls.length === 0) return; // the model is done
+    if (calls.length === 0) {
+      // ---- Stop hooks: a guaranteed check before we hand back (e.g. "do the tests pass?") ----
+      if (!hooks || !topLevel || !hooks.has('Stop') || opts.abortSignal?.aborted) return;
+      const r = await hooks.run('Stop', { last_message: text }, opts.abortSignal);
+      yield* hookErrors(r);
+      if (!r.block) return;
+      if (stopContinues >= MAX_STOP_CONTINUES) {
+        yield { type: 'notice', text: `A Stop hook still objects after ${MAX_STOP_CONTINUES} retries; stopping. Last reason: ${r.block}` };
+        return;
+      }
+      stopContinues++;
+      yield { type: 'notice', text: `Stop hook: ${r.block.split('\n')[0]} — continuing (${stopContinues}/${MAX_STOP_CONTINUES})` };
+      messages.push({ role: 'user', content: `[A Stop hook objected; fix this before finishing]\n${r.block}` });
+      opts.session?.sync(messages);
+      continue;
+    }
 
     // ---- 2. Validate + permission-check every call (sequentially: prompts must not overlap) ----
     const prepared: Prepared[] = [];
@@ -133,8 +172,22 @@ export async function* runLoop(messages: Message[], opts: LoopOptions): AsyncGen
       }
       yield { type: 'tool-call', call, key, display: describeCall(key, parsed.data), preview };
 
+      // PreToolUse hooks run before the permission check: a hook's "no" needs no prompt, and its
+      // "yes" may replace the prompt (but never beats a deny rule).
+      let hookAllow = false;
+      if (hooks?.has('PreToolUse', tool.name)) {
+        const r = await hooks.run('PreToolUse', { tool_name: tool.name, tool_input: parsed.data }, opts.abortSignal);
+        yield* hookErrors(r);
+        if (r.block) {
+          prepared.push({ call, tool, error: `Blocked by a PreToolUse hook: ${r.block}` });
+          continue;
+        }
+        hookAllow = Boolean(r.allow);
+      }
+
       let decision = checkPermission(tool, parsed.data, opts);
       let denial = 'Blocked by a deny rule in the user\'s settings.';
+      if (decision === 'ask' && hookAllow) decision = 'allow';
       if (decision === 'ask') {
         const answer = await opts.askPermission(call, tool, key, preview);
         if (answer === 'always') opts.sessionAllow.push(`${tool.name}(${key})`);
@@ -181,6 +234,18 @@ export async function* runLoop(messages: Message[], opts: LoopOptions): AsyncGen
       const outputs = await all;
       for (const [j, p] of batch.entries()) {
         const out = outputs[j]!;
+        // PostToolUse hooks: only for calls that actually ran. Exit 2 = feedback for the model
+        // (e.g. formatter/linter complaints), attached to the result it relates to.
+        if (hooks && p.tool && !p.error && hooks.has('PostToolUse', p.tool.name)) {
+          const r = await hooks.run(
+            'PostToolUse',
+            { tool_name: p.tool.name, tool_input: p.args, tool_output: out.output, is_error: out.isError },
+            opts.abortSignal,
+          );
+          yield* hookErrors(r);
+          const feedback = [r.block, ...r.context].filter(Boolean).join('\n\n');
+          if (feedback) out.output += `\n\n[PostToolUse hook feedback]\n${feedback}`;
+        }
         messages.push({ role: 'tool', toolCallId: p.call.id, toolName: p.call.name, content: out.output, isError: out.isError });
         yield { type: 'tool-result', call: p.call, ...out };
       }
@@ -192,6 +257,11 @@ export async function* runLoop(messages: Message[], opts: LoopOptions): AsyncGen
   yield { type: 'notice', text: `Stopped after ${maxSteps} steps. Send a message to continue.` };
 }
 
+/** A broken hook is the user's problem to fix, not the model's: surface it as a notice. */
+function* hookErrors(r: HookResult): Generator<LoopEvent> {
+  for (const text of r.errors) yield { type: 'notice', text: `Hook problem: ${text}` };
+}
+
 /** "tool, glob=**\/*.ts" — the key first, then any other args that aren't the key itself. */
 function describeCall(key: string, args: unknown): string {
   const extras = Object.entries((args ?? {}) as Record<string, unknown>)
@@ -201,7 +271,7 @@ function describeCall(key: string, args: unknown): string {
       // Edit/Write contents would flood the screen; the diff preview shows them properly.
       return `${k}=${s.length > 60 || s.includes('\n') ? `<${s.split('\n').length} lines>` : s}`;
     });
-  return [key, ...extras].join(', ');
+  return [key, ...extras].filter(Boolean).join(', ');
 }
 
 /** Errors (no tool) are trivially parallel-safe; otherwise ask the tool about this call. */
@@ -270,6 +340,9 @@ function makeAgentRunner(parent: LoopOptions): (req: AgentRequest) => Promise<st
       sessionAllow: parent.sessionAllow,
       fileState: new Map(),
       models: model ? [model, ...chain] : parent.models,
+      // Guards like "never touch .env" must hold inside sub-agents too.
+      hooks: parent.hooks,
+      isSubagent: true,
     })) {
       if (ev.type === 'tool-call') {
         steps++;

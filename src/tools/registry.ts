@@ -39,8 +39,13 @@ export function toolStatuses(settings: Settings): ToolStatus[] {
  * Enabled tools for a run. With `cwd`, Task is rebuilt so its description lists the project's own
  * agents (.jarvis/agents/) too; without it, Task only knows the built-in agents.
  */
-export function activeTools(settings: Settings, cwd?: string): Tool[] {
-  const tools = toolStatuses(settings).filter((s) => s.enabled).map((s) => s.tool);
+export function activeTools(settings: Settings, cwd?: string, extra: Tool[] = []): Tool[] {
+  // `extra` = tools from MCP servers. The same disabled list applies to them.
+  const disabled = new Set(settings.tools?.disabled ?? []);
+  const tools = [
+    ...toolStatuses(settings).filter((s) => s.enabled).map((s) => s.tool),
+    ...extra.filter((t) => !disabled.has(t.name)),
+  ];
   if (cwd === undefined) return tools;
   return tools.map((t) => {
     if (t.name !== 'Task') return t;
@@ -60,7 +65,7 @@ export function findTool(name: string): Tool | undefined {
 
 /** The JSON Schema the model sees for a tool's arguments. `$schema` is dropped: wasted tokens. */
 export function toolParameters(tool: Tool): Record<string, unknown> {
-  const { $schema: _ignored, ...rest } = z.toJSONSchema(tool.schema) as Record<string, unknown>;
+  const { $schema: _ignored, ...rest } = (tool.parameters ?? z.toJSONSchema(tool.schema)) as Record<string, unknown>;
   return rest;
 }
 

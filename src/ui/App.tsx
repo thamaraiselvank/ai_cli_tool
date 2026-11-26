@@ -10,8 +10,11 @@ import { loadSettings } from '../config/settings.js';
 import { DialogView, type Dialog, type UI } from './dialogs.js';
 import { runLoop, type PermissionAnswer } from '../core/loop.js';
 import type { Message, ToolCall } from '../core/messages.js';
+import type { McpManager } from '../mcp/client.js';
 import type { Router } from '../providers/router.js';
 import { buildSystemPrompt } from '../core/systemPrompt.js';
+import { untrustedNotice } from '../commands/hooks.js';
+import { HookRunner } from '../hooks/index.js';
 import { activeTools } from '../tools/registry.js';
 import { formatTodos, type Todo } from '../tools/todo.js';
 import type { Tool } from '../tools/types.js';
@@ -26,6 +29,8 @@ interface Props {
   initialMessages?: Message[];
   /** `jarvis --resume` without an id: open the picker on start. */
   openResumePicker?: boolean;
+  /** MCP connections (started by cli.ts, in the background). */
+  mcp?: McpManager;
 }
 
 const RECAP_MESSAGES = 30;
@@ -84,7 +89,7 @@ function summarize(output: string): string {
   return lines.length > 1 ? `${first}  … (${lines.length} lines)` : first;
 }
 
-export function App({ router, system: initialSystem, cwd, session, initialMessages, openResumePicker }: Props) {
+export function App({ router, system: initialSystem, cwd, session, initialMessages, openResumePicker, mcp }: Props) {
   const { exit } = useApp();
   const [items, setItems] = useState<Item[]>(() =>
     initialMessages?.length
@@ -135,14 +140,22 @@ export function App({ router, system: initialSystem, cwd, session, initialMessag
       // Settings are re-read every turn so `/tools disable X` takes effect on the next message.
       const settings = loadSettings(cwd);
       systemRef.current = buildSystemPrompt(cwd);
+      // MCP tools must be in the first request too, or the tool list (and prompt cache) changes on
+      // the second one. Servers still starting? Wait for them, bounded by the connect timeout.
+      if (mcp && !mcp.settled) {
+        add({ kind: 'info', text: 'Waiting for MCP servers to start…' });
+        await mcp.start();
+      }
       for await (const ev of runLoop(history.current, {
         router, system: systemRef.current, cwd, settings,
-        tools: activeTools(settings, cwd),
+        tools: activeTools(settings, cwd, mcp?.tools()),
         abortSignal: ac.signal,
         askPermission,
         sessionAllow: sessionAllow.current,
         fileState: fileState.current,
         session: sessionRef.current,
+        // Re-read every turn, like settings, so edits to hooks apply without a restart.
+        hooks: HookRunner.load(cwd, sessionRef.current.id),
       })) {
         if (ev.type === 'text') {
           buffer += ev.text;
@@ -187,6 +200,7 @@ export function App({ router, system: initialSystem, cwd, session, initialMessag
   const ctx: CommandContext = {
     cwd,
     router,
+    mcp,
     ui,
     print: (text, kind = 'info') => add({ kind, text }),
     setContextUsage: (used, limit) => setUsage({ used, limit }),
@@ -238,6 +252,21 @@ export function App({ router, system: initialSystem, cwd, session, initialMessag
     void task.finally(() => {
       setBusy(false);
       setDialog(null);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // One line once MCP servers are up, so a broken server is noticed before it's needed.
+  useEffect(() => {
+    const notice = untrustedNotice(cwd);
+    if (notice) add({ kind: 'info', text: notice });
+    if (!mcp) return;
+    void mcp.start().then(() => {
+      const servers = mcp.servers().filter((s) => s.status !== 'disabled');
+      const ok = servers.filter((s) => s.status === 'connected').map((s) => `${s.name} (${s.tools.length} tools)`);
+      const bad = servers.filter((s) => s.status === 'failed');
+      if (ok.length) add({ kind: 'info', text: `MCP: ${ok.join(', ')}` });
+      for (const s of bad) add({ kind: 'error', text: `MCP server "${s.name}" failed: ${s.error?.split('\n')[0]}. /mcp for details.` });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

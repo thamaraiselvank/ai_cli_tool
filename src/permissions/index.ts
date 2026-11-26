@@ -12,7 +12,7 @@ interface Rule {
 
 /** "Bash(git status)" → { tool: 'Bash', spec: 'git status' };  "Read" → { tool: 'Read' } */
 export function parseRule(rule: string): Rule {
-  const m = /^([A-Za-z0-9_]+)(?:\((.*)\))?$/.exec(rule.trim());
+  const m = /^([A-Za-z0-9_-]+\*?)(?:\((.*)\))?$/.exec(rule.trim());
   if (!m) throw new Error(`Bad permission rule: "${rule}"`);
   return { tool: m[1]!, spec: m[2] };
 }
@@ -20,7 +20,11 @@ export function parseRule(rule: string): Rule {
 /** Spec matching: exact, or "prefix:*" (e.g. "npm test:*" matches "npm test -- --watch"). */
 export function ruleMatches(rule: string, toolName: string, key: string): boolean {
   const r = parseRule(rule);
-  if (r.tool.toLowerCase() !== toolName.toLowerCase()) return false;
+  // A trailing * on the tool name is a prefix: "mcp__github__*" covers every tool of that server.
+  const nameOk = r.tool.endsWith('*')
+    ? toolName.toLowerCase().startsWith(r.tool.slice(0, -1).toLowerCase())
+    : r.tool.toLowerCase() === toolName.toLowerCase();
+  if (!nameOk) return false;
   if (r.spec === undefined || r.spec === '*') return true;
   if (r.spec.endsWith(':*')) return key.startsWith(r.spec.slice(0, -2));
   return key === r.spec;
@@ -42,7 +46,7 @@ export function checkPermission(
   const allow = [...(ctx.settings.permissions?.allow ?? []), ...ctx.sessionAllow];
   if (deny.some((r) => ruleMatches(r, tool.name, key))) return 'deny';
   if (allow.some((r) => ruleMatches(r, tool.name, key))) return 'allow';
-  if (callIsReadOnly(tool, args)) {
+  if (tool.defaultPermission !== 'ask' && callIsReadOnly(tool, args)) {
     const paths = tool.paths?.(args, ctx.cwd) ?? [];
     return paths.every((p) => isInside(ctx.cwd, p)) ? 'allow' : 'ask';
   }
