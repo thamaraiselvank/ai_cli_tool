@@ -9,6 +9,9 @@ import { runLoop } from './core/loop.js';
 import type { Message } from './core/messages.js';
 import { Session } from './core/session.js';
 import { buildSystemPrompt } from './core/systemPrompt.js';
+import { untrustedNotice } from './commands/hooks.js';
+import { isTrusted, trustedMcpServers, trustProject } from './config/trust.js';
+import { HookRunner } from './hooks/index.js';
 import { createMcpManager, type McpManager } from './mcp/client.js';
 import { listModels, PROVIDERS } from './providers/index.js';
 import { Router } from './providers/router.js';
@@ -61,6 +64,9 @@ async function runHeadless(
   const cwd = process.cwd();
   const messages = conv.messages;
   messages.push({ role: 'user', content: prompt });
+  const notice = untrustedNotice(cwd);
+  if (notice) process.stderr.write(`[${notice}]
+`);
   if (mcp) {
     await mcp.start();
     for (const s of mcp.servers()) if (s.status === 'failed') process.stderr.write(`[MCP server "${s.name}" failed: ${s.error?.split('\n')[0]}]\n`);
@@ -72,6 +78,7 @@ async function runHeadless(
     sessionAllow: [],
     fileState: new Map(),
     session: conv.session,
+    hooks: HookRunner.load(cwd, conv.session.id),
     // No one to ask in headless mode: --yes approves, otherwise deny (deny rules apply either way).
     askPermission: async () => (yes ? 'allow' : 'deny'),
   })) {
@@ -116,7 +123,7 @@ const program = new Command()
     const router = buildRouter(opts, settings);
     const conv = pickConversation(cwd, opts);
     // Servers start now, in the background; the first message waits for them if needed.
-    const mcp = createMcpManager(settings.mcpServers, cwd, pkg.version);
+    const mcp = createMcpManager(trustedMcpServers(cwd), cwd, pkg.version);
     if (opts.print) {
       if (router.chain.length === 0) {
         console.error('No model set up yet. Run `jarvis` once to choose a provider and model, or pass --model provider/model.');
@@ -148,6 +155,15 @@ const program = new Command()
     await app.waitUntilExit();
     // Stop server processes; otherwise they keep Node (and the terminal) alive after quitting.
     await mcp?.close();
+  });
+
+program
+  .command('trust')
+  .description("trust this folder's .jarvis settings to run hooks and MCP servers")
+  .action(() => {
+    const cwd = process.cwd();
+    if (isTrusted(cwd)) return console.log('This folder is already trusted.');
+    console.log(`Trusted ${cwd} (saved in ${trustProject(cwd)}).`);
   });
 
 program

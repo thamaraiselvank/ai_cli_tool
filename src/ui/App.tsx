@@ -13,6 +13,8 @@ import type { Message, ToolCall } from '../core/messages.js';
 import type { McpManager } from '../mcp/client.js';
 import type { Router } from '../providers/router.js';
 import { buildSystemPrompt } from '../core/systemPrompt.js';
+import { untrustedNotice } from '../commands/hooks.js';
+import { HookRunner } from '../hooks/index.js';
 import { activeTools } from '../tools/registry.js';
 import { formatTodos, type Todo } from '../tools/todo.js';
 import type { Tool } from '../tools/types.js';
@@ -152,6 +154,8 @@ export function App({ router, system: initialSystem, cwd, session, initialMessag
         sessionAllow: sessionAllow.current,
         fileState: fileState.current,
         session: sessionRef.current,
+        // Re-read every turn, like settings, so edits to hooks apply without a restart.
+        hooks: HookRunner.load(cwd, sessionRef.current.id),
       })) {
         if (ev.type === 'text') {
           buffer += ev.text;
@@ -254,6 +258,8 @@ export function App({ router, system: initialSystem, cwd, session, initialMessag
 
   // One line once MCP servers are up, so a broken server is noticed before it's needed.
   useEffect(() => {
+    const notice = untrustedNotice(cwd);
+    if (notice) add({ kind: 'info', text: notice });
     if (!mcp) return;
     void mcp.start().then(() => {
       const servers = mcp.servers().filter((s) => s.status !== 'disabled');

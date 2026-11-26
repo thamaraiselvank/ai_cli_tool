@@ -1,3 +1,5 @@
+import { autoTrust, trustedMcpServers } from '../config/trust.js';
+import { untrustedNotice } from './hooks.js';
 import { loadSettings, readSettingsFile, settingsPath, updateSettings, type McpServerConfig, type SettingsScope } from '../config/settings.js';
 import { McpManager, makeConnector, transportKind, type ServerState } from '../mcp/client.js';
 import { estimateToolTokens } from '../tools/registry.js';
@@ -128,12 +130,13 @@ export async function runMcpCli(argv: string[], cwd: string, version: string): P
     case '--help':
       return MCP_HELP;
     case 'list': {
-      const servers = loadSettings(cwd).mcpServers ?? {};
-      if (!Object.keys(servers).length) return `No MCP servers configured.\n\n${MCP_HELP}`;
+      const servers = trustedMcpServers(cwd);
+      const notice = untrustedNotice(cwd);
+      if (!Object.keys(servers).length) return `${notice ? `${notice}\n\n` : ''}No MCP servers configured.\n\n${MCP_HELP}`;
       const mcp = new McpManager(servers, { cwd, connect: makeConnector(version) });
       try {
         await mcp.start();
-        return mcp.servers().map((s) => formatServer(s, true)).join('\n');
+        return [...mcp.servers().map((s) => formatServer(s, true)), ...(notice ? ['', notice] : [])].join('\n');
       } finally {
         await mcp.close();
       }
@@ -146,13 +149,16 @@ export async function runMcpCli(argv: string[], cwd: string, version: string): P
     }
     case 'add': {
       const { name, config } = parseAdd(rest);
+      // Checked before writing, so the server being added doesn't count as "something else".
+      const trustNote = scope === 'global' ? () => '' : autoTrust(cwd, 'MCP servers');
       const file = updateSettings(scope, (s) => {
         s.mcpServers = { ...s.mcpServers, [name]: config };
       }, cwd);
+      const trusted = trustNote();
       const secretHint = Object.values({ ...config.env, ...config.headers }).some((v) => !v.includes('${'))
         ? '\nTip: keep secrets out of settings files: use "${MY_TOKEN}" and set MY_TOKEN in your environment.'
         : '';
-      return `Added MCP server "${name}" to ${file}. Check it with: jarvis mcp list${secretHint}`;
+      return `Added MCP server "${name}" to ${file}. Check it with: jarvis mcp list${trusted}${secretHint}`;
     }
     case 'remove': {
       const [name] = rest;

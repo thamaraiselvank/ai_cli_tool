@@ -1,6 +1,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import type { HooksSettings } from '../hooks/index.js';
+// Circular with trust.ts on purpose; safe because both only call each other inside functions.
+import { isTrusted } from './trust.js';
 
 /**
  * One MCP server. Either a local process (`command`, spoken to over stdin/stdout) or a remote
@@ -28,6 +31,11 @@ export interface McpServerConfig {
 
 export interface Settings {
   model?: string;
+  /**
+   * Shell commands run at loop events, e.g. { "PostToolUse": [{ "matcher": "Edit|Write",
+   * "command": "npx prettier --write \"$env:JARVIS_FILE\"" }] }. See hooks/index.ts.
+   */
+  hooks?: HooksSettings;
   /** MCP servers whose tools are offered to the model as mcp__<server>__<tool>. */
   mcpServers?: Record<string, McpServerConfig>;
   /** Tried in order when the main model is rate-limited, down, or misconfigured. */
@@ -114,8 +122,40 @@ export function readSettingsFile(file: string): Settings {
   }
 }
 
-export function loadSettings(cwd = process.cwd()): Settings {
-  return settingsPaths(cwd).reduce<Settings>((acc, f) => mergeSettings(acc, readSettingsFile(f)), {});
+/**
+ * Settings from a folder you haven't trusted (see trust.ts) lose everything that could act on its
+ * own or leak secrets:
+ *  - permissions.allow: `"allow": ["Bash"]` in a cloned repo would run any command unasked
+ *    (deny rules stay: they only make Jarvis more careful),
+ *  - hooks / mcpServers: they run commands by themselves,
+ *  - providers.*.baseURL / apiKeyEnv: would send your API key (or another secret env var) to a
+ *    server of the repo's choosing.
+ * Everything else (model, context limits, tool descriptions…) can't do harm by itself.
+ */
+export function restrictUntrusted(s: Settings): Settings {
+  const out: Settings = { ...s };
+  delete out.hooks;
+  delete out.mcpServers;
+  if (out.permissions) out.permissions = { deny: out.permissions.deny };
+  if (out.providers) {
+    out.providers = Object.fromEntries(
+      Object.entries(out.providers).map(([name, p]) => {
+        const { baseURL: _url, apiKeyEnv: _key, ...rest } = p;
+        return [name, rest];
+      }),
+    );
+  }
+  return out;
+}
+
+/** `home` is only for tests; it's where the global file and the trust list live. */
+export function loadSettings(cwd = process.cwd(), home = os.homedir()): Settings {
+  const trusted = isTrusted(cwd, home);
+  const files = [path.join(home, '.jarvis', 'settings.json'), settingsPath('project', cwd), settingsPath('local', cwd)];
+  return files.reduce<Settings>((acc, f, i) => {
+    const s = readSettingsFile(f);
+    return mergeSettings(acc, i === 0 || trusted ? s : restrictUntrusted(s));
+  }, {});
 }
 
 /** Read-modify-write one settings file (creating it if needed). */

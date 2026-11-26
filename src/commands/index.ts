@@ -1,6 +1,8 @@
 import { loadSettings, updateSettings } from '../config/settings.js';
+import { autoTrust } from '../config/trust.js';
 import { parseRule } from '../permissions/index.js';
 import { agentsCommand, memoryCommand, todosCommand } from './agents.js';
+import { hooksCommand, trustCommand } from './hooks.js';
 import { mcpCommand } from './mcp.js';
 import { fallbackCommand, modelCommand } from './model.js';
 import { providerCommand } from './provider.js';
@@ -44,6 +46,8 @@ const permissionsCommand: SlashCommand = {
     if (sub && ['allow', 'deny', 'remove'].includes(sub)) {
       if (!rule) return ctx.print('Give a rule, e.g. /permissions allow Bash(npm test:*)', 'error');
       parseRule(rule); // throws on bad syntax
+      // Only allow rules need trust (deny rules always apply), see restrictUntrusted.
+      const trustNote = sub === 'allow' ? autoTrust(ctx.cwd, 'allow rules') : () => '';
       // Personal + per-project: stored in .jarvis/settings.local.json (gitignored).
       const file = updateSettings('local', (s) => {
         const p = { allow: s.permissions?.allow ?? [], deny: s.permissions?.deny ?? [] };
@@ -53,7 +57,7 @@ const permissionsCommand: SlashCommand = {
         if (sub === 'deny') p.deny.push(rule);
         s.permissions = p;
       }, ctx.cwd);
-      return ctx.print(`${sub === 'remove' ? 'Removed' : sub === 'allow' ? 'Allowed' : 'Denied'} ${rule} in ${file}`);
+      return ctx.print(`${sub === 'remove' ? 'Removed' : sub === 'allow' ? 'Allowed' : 'Denied'} ${rule} in ${file}${trustNote()}`);
     }
     const p = loadSettings(ctx.cwd).permissions ?? {};
     ctx.print(
@@ -96,6 +100,8 @@ export const COMMANDS: SlashCommand[] = [
   toolsCommand,
   agentsCommand,
   mcpCommand,
+  hooksCommand,
+  trustCommand,
   memoryCommand,
   todosCommand,
   permissionsCommand,
