@@ -47,8 +47,18 @@ export interface Tool<A = any> {
   /** Short and model-facing. Users can override it per project via settings (see registry.ts). */
   description: string;
   schema: z.ZodType<A>;
+  /**
+   * JSON Schema sent to the model instead of one generated from `schema`. For tools defined
+   * elsewhere (MCP servers) that already describe their args in JSON Schema.
+   */
+  parameters?: Record<string, unknown>;
   /** Read-only tools can run in parallel and skip the permission prompt inside the project. */
   readOnly: boolean;
+  /**
+   * 'ask' = never auto-allow, even when read-only. For tools whose read-only claim comes from
+   * someone we don't trust (an MCP server's annotations).
+   */
+  defaultPermission?: 'ask';
   /** Per-call override of `readOnly`, for tools whose effect depends on the args (e.g. Task). */
   isReadOnly?(args: A): boolean;
   /**

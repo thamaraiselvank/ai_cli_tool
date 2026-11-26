@@ -1,6 +1,7 @@
 import { loadSettings, updateSettings } from '../config/settings.js';
 import { parseRule } from '../permissions/index.js';
 import { agentsCommand, memoryCommand, todosCommand } from './agents.js';
+import { mcpCommand } from './mcp.js';
 import { fallbackCommand, modelCommand } from './model.js';
 import { providerCommand } from './provider.js';
 import { compactCommand, contextCommand, resumeCommand } from './session.js';
@@ -94,6 +95,7 @@ export const COMMANDS: SlashCommand[] = [
   usageCommand,
   toolsCommand,
   agentsCommand,
+  mcpCommand,
   memoryCommand,
   todosCommand,
   permissionsCommand,

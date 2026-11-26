@@ -2,12 +2,14 @@
 import { Command } from 'commander';
 import React from 'react';
 import { render } from 'ink';
+import { runMcpCli } from './commands/mcp.js';
 import { runToolsCommand, TOOLS_HELP } from './commands/tools.js';
 import { loadSettings, type Settings } from './config/settings.js';
 import { runLoop } from './core/loop.js';
 import type { Message } from './core/messages.js';
 import { Session } from './core/session.js';
 import { buildSystemPrompt } from './core/systemPrompt.js';
+import { createMcpManager, type McpManager } from './mcp/client.js';
 import { listModels, PROVIDERS } from './providers/index.js';
 import { Router } from './providers/router.js';
 import { activeTools } from './tools/registry.js';
@@ -53,14 +55,20 @@ function pickConversation(cwd: string, opts: { continue?: boolean; resume?: stri
   return { session, messages, resumed: true };
 }
 
-async function runHeadless(prompt: string, router: Router, settings: Settings, conv: Conversation, yes: boolean, usage: boolean) {
+async function runHeadless(
+  prompt: string, router: Router, settings: Settings, conv: Conversation, yes: boolean, usage: boolean, mcp?: McpManager,
+) {
   const cwd = process.cwd();
   const messages = conv.messages;
   messages.push({ role: 'user', content: prompt });
+  if (mcp) {
+    await mcp.start();
+    for (const s of mcp.servers()) if (s.status === 'failed') process.stderr.write(`[MCP server "${s.name}" failed: ${s.error?.split('\n')[0]}]\n`);
+  }
   for await (const ev of runLoop(messages, {
     router, cwd, settings,
     system: buildSystemPrompt(cwd),
-    tools: activeTools(settings, cwd),
+    tools: activeTools(settings, cwd, mcp?.tools()),
     sessionAllow: [],
     fileState: new Map(),
     session: conv.session,
@@ -107,21 +115,26 @@ const program = new Command()
     const settings = loadSettings(cwd);
     const router = buildRouter(opts, settings);
     const conv = pickConversation(cwd, opts);
+    // Servers start now, in the background; the first message waits for them if needed.
+    const mcp = createMcpManager(settings.mcpServers, cwd, pkg.version);
     if (opts.print) {
       if (router.chain.length === 0) {
         console.error('No model set up yet. Run `jarvis` once to choose a provider and model, or pass --model provider/model.');
         process.exit(1);
       }
       try {
-        await runHeadless([opts.print, ...words].join(' '), router, settings, conv, Boolean(opts.yes), Boolean(opts.usage));
+        await runHeadless([opts.print, ...words].join(' '), router, settings, conv, Boolean(opts.yes), Boolean(opts.usage), mcp);
       } catch (e) {
         console.error(`Error: ${(e as Error).message}`);
         if (opts.usage) console.error(router.formatUsage());
+        await mcp?.close();
         process.exit(1);
       }
+      await mcp?.close();
       return;
     }
-    render(
+    void mcp?.start();
+    const app = render(
       React.createElement(App, {
         router,
         cwd,
@@ -129,8 +142,26 @@ const program = new Command()
         session: conv.session,
         initialMessages: conv.resumed ? conv.messages : undefined,
         openResumePicker: opts.resume === true,
+        mcp,
       }),
     );
+    await app.waitUntilExit();
+    // Stop server processes; otherwise they keep Node (and the terminal) alive after quitting.
+    await mcp?.close();
+  });
+
+program
+  .command('mcp [args...]')
+  .description('manage MCP servers (list, add, remove, get)')
+  .allowUnknownOption() // lets --global/--env/-y etc. reach our parser untouched
+  .helpOption(false) // -h/--help go to runMcpCli, which prints MCP_HELP
+  .action(async () => {
+    try {
+      console.log(await runMcpCli(process.argv.slice(process.argv.indexOf('mcp') + 1), process.cwd(), pkg.version));
+    } catch (e) {
+      console.error((e as Error).message);
+      process.exit(1);
+    }
   });
 
 program

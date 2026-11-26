@@ -68,7 +68,7 @@ export const compactCommand: SlashCommand = {
         router: ctx.router,
         settings,
         system: ctx.conversation.system,
-        toolTokens: activeTools(settings, ctx.cwd).reduce((n, t) => n + estimateToolTokens(t), 0),
+        toolTokens: activeTools(settings, ctx.cwd, ctx.mcp?.tools()).reduce((n, t) => n + estimateToolTokens(t), 0),
         session: ctx.conversation.session(),
       },
       { compact: true, instructions: args.join(' ') || undefined },
@@ -90,7 +90,7 @@ export const contextCommand: SlashCommand = {
     const cfg = contextConfig(settings, await effectiveLimit(model, settings));
     const messages = ctx.conversation.messages();
     const system = countTokens(ctx.conversation.system);
-    const tools = activeTools(settings, ctx.cwd).reduce((n, t) => n + estimateToolTokens(t), 0);
+    const tools = activeTools(settings, ctx.cwd, ctx.mcp?.tools()).reduce((n, t) => n + estimateToolTokens(t), 0);
     const toolOut = messagesTokens(messages.filter((m) => m.role === 'tool' && m.content !== CLEARED_PLACEHOLDER));
     const chat = messagesTokens(messages) - toolOut;
     const total = system + tools + toolOut + chat;

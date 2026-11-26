@@ -1,5 +1,6 @@
 import type { Message } from '../core/messages.js';
 import type { Session } from '../core/session.js';
+import type { McpManager } from '../mcp/client.js';
 import type { Router } from '../providers/router.js';
 import type { UI } from '../ui/dialogs.js';
 
@@ -19,6 +20,8 @@ export interface Conversation {
 export interface CommandContext {
   cwd: string;
   router: Router;
+  /** Live MCP connections, if any servers are configured. */
+  mcp?: McpManager;
   ui: UI;
   conversation: Conversation;
   print(text: string, kind?: 'info' | 'error'): void;

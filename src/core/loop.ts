@@ -201,7 +201,7 @@ function describeCall(key: string, args: unknown): string {
       // Edit/Write contents would flood the screen; the diff preview shows them properly.
       return `${k}=${s.length > 60 || s.includes('\n') ? `<${s.split('\n').length} lines>` : s}`;
     });
-  return [key, ...extras].join(', ');
+  return [key, ...extras].filter(Boolean).join(', ');
 }
 
 /** Errors (no tool) are trivially parallel-safe; otherwise ask the tool about this call. */
