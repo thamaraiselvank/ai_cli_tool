@@ -10,12 +10,12 @@ It works with OpenRouter's free models, Groq, Google Gemini (free tier), Cerebra
 local models through Ollama or LM Studio. You can switch models at any time, and set backups that
 are used automatically when a free tier hits its rate limit.
 
-> Jarvis is a personal learning project in active development. It hasn't been published to npm
-> yet, so you install it from source (below).
+> Jarvis is a personal learning project in active development.
 
 ## Contents
 
 - [Install](#install)
+- [Privacy: what stays on your computer](#privacy-what-stays-on-your-computer)
 - [Quick start](#quick-start)
 - [What it can do](#what-it-can-do)
 - [Commands](#commands)
@@ -29,17 +29,54 @@ are used automatically when a free tier hits its rate limit.
 
 ## Install
 
-Requires **Node.js 22 or newer** and Git.
+Requires **Node.js 22 or newer** ([download](https://nodejs.org)). Works on Windows, macOS and Linux.
+
+```sh
+npm install -g jarvis-code
+```
+
+The package is called `jarvis-code`; the command it installs is `jarvis`. Check it worked with
+`jarvis --version`.
+
+| To… | Run |
+|---|---|
+| update to the latest version | `npm update -g jarvis-code` |
+| uninstall | `npm uninstall -g jarvis-code` |
+
+The package page is https://www.npmjs.com/package/jarvis-code.
+
+### From source
+
+For trying unreleased changes, or working on Jarvis itself (this also needs Git):
 
 ```sh
 git clone https://github.com/thamaraiselvank/ai_cli_tool.git
 cd ai_cli_tool
 npm install
 npm run build
-npm link          # makes the `jarvis` command available everywhere
+npm link          # makes the `jarvis` command use this copy
 ```
 
 To run straight from source instead, without building: `npm run dev`.
+
+## Privacy: what stays on your computer
+
+Jarvis has no server of its own and collects no data: there's no account, analytics or telemetry.
+It only connects to services you set up yourself:
+
+| What leaves your computer | Where it goes | When |
+|---|---|---|
+| Your messages, and the file contents and command output the model asks for | the AI provider you chose (e.g. Groq, OpenRouter, Gemini) | every request to the model |
+| Your API key for that provider | that provider only, to sign in | every request, and when a key is checked |
+| Tool calls for an MCP server | the MCP servers you configured | when the model uses their tools |
+
+Everything else stays on your computer: your settings, memory files, saved conversations and
+API keys (kept in your OS password store; see [Security model](#security-model)).
+
+The provider *does* see what you send it, so read its privacy policy, especially for free tiers.
+Some free plans may use requests to improve their models. For code that must never leave your
+machine, use a local model with [Ollama](https://ollama.com) or [LM Studio](https://lmstudio.ai):
+then nothing goes over the network at all.
 
 ## Quick start
 
